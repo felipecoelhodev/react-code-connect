@@ -1,5 +1,12 @@
 {
-  "users": [],
+  "users": [
+    {
+      "email": "contato@felipecoelho.dev",
+      "password": "$2a$10$ftEtN7xbl5GPml5pmDnclOqCrEI4XQTl.ljFu80DCX8i9TSnGQI4S",
+      "name": "Felipe",
+      "id": 1
+    }
+  ],
   "devs": [
     {
       "id": "1",
