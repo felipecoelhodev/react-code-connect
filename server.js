@@ -1,10 +1,15 @@
 import { createRequire } from "module";
+
+import dotenv from "dotenv";
+dotenv.config();
+
 const require = createRequire(import.meta.url);
 
 const jsonServer = require("json-server");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
+const { google } = require("googleapis");
 
 const server = jsonServer.create();
 const router = jsonServer.router("database.json");
@@ -14,9 +19,22 @@ const defaults = jsonServer.defaults();
 const ACCESS_TOKEN_SECRET = "seu-access-token-secret-super-secreto";
 const REFRESH_TOKEN_SECRET = "seu-refresh-token-secret-ainda-mais-secreto";
 
-// Note: Permissões gerenciadas manualmente nas rotas customizadas
+// Configuração do Google OAuth
+const GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID || "your-google-client-id";
+const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET || "your-google-client-secret";
+const GOOGLE_REDIRECT_URI = "http://localhost:3001/auth/google/callback";
 
-// CORS deve vir PRIMEIRO, antes de qualquer outro middleware
+const oauth2Client = new google.auth.OAuth2(
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
+);
+
+// Permissões gerenciadas manualmente nas rotas customizadas
+
+// CORS vem PRIMEIRO, antes de qualquer outro middleware
 server.use(
   cors({
     origin: ["http://localhost:5173", "http://localhost:5174"],
@@ -51,7 +69,7 @@ server.use((req, res, next) => {
   next();
 });
 
-// Agora sim os outros middlewares
+// CORS OK, agora sim os outros middlewares
 server.use(defaults);
 server.use(cookieParser());
 server.use(jsonServer.bodyParser);
@@ -73,6 +91,14 @@ server.post("/login", async (req, res) => {
 
     if (!user) {
       return res.status(400).json({ message: "Email ou senha incorretos" });
+    }
+
+    // Verificar se é usuário OAuth (sem senha)
+    if (!user.password) {
+      return res.status(400).json({
+        message:
+          'Esta conta usa login social. Use o botão "Entrar com Google".',
+      });
     }
 
     // Verificar senha
@@ -112,6 +138,8 @@ server.post("/login", async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name || user.email.split("@")[0],
+        description: user.description || null,
+        categories: user.categories || [],
       },
     });
   } catch (error) {
@@ -186,6 +214,8 @@ server.post("/register", async (req, res) => {
         id: newUser.id,
         email: newUser.email,
         name: newUser.name,
+        description: null,
+        categories: [],
       },
     });
   } catch (error) {
@@ -228,6 +258,8 @@ server.post("/auth/refresh", (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name || user.email.split("@")[0],
+        description: user.description || null,
+        categories: user.categories || [],
       },
     });
   } catch (error) {
@@ -237,11 +269,181 @@ server.post("/auth/refresh", (req, res) => {
   }
 });
 
+// ==================== GOOGLE OAUTH ROUTES ====================
+
+// Rota para iniciar o fluxo OAuth com Google
+server.get("/auth/google", (req, res) => {
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: [
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
+    prompt: "consent",
+  });
+
+  res.redirect(authUrl);
+});
+
+// Rota de callback do Google OAuth
+server.get("/auth/google/callback", async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.redirect("http://localhost:5173/login?error=no_code");
+  }
+
+  try {
+    // Trocar código por tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    // Buscar informações do usuário
+    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+    const { data } = await oauth2.userinfo.get();
+
+    const db = router.db;
+
+    // Buscar ou criar usuário
+    let user = db.get("users").find({ googleId: data.id }).value();
+
+    if (!user) {
+      // Verificar se já existe usuário com o mesmo email
+      user = db.get("users").find({ email: data.email }).value();
+
+      if (user) {
+        // Atualizar usuário existente com googleId
+        db.get("users")
+          .find({ email: data.email })
+          .assign({
+            googleId: data.id,
+          })
+          .write();
+
+        user = db.get("users").find({ email: data.email }).value();
+      } else {
+        // Criar novo usuário
+        const newUser = {
+          id: db.get("users").size().value() + 1,
+          email: data.email,
+          name: data.name,
+          googleId: data.id,
+          password: null, // OAuth users não tem senha
+        };
+
+        db.get("users").push(newUser).write();
+        user = newUser;
+      }
+    }
+
+    // Gerar tokens JWT
+    const accessToken = jwt.sign(
+      { sub: user.id.toString(), email: user.email },
+      ACCESS_TOKEN_SECRET,
+      { expiresIn: "15m" },
+    );
+
+    const refreshToken = jwt.sign(
+      { userId: user.id.toString() },
+      REFRESH_TOKEN_SECRET,
+      {
+        expiresIn: "7d",
+      },
+    );
+
+    // Definir cookie
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    // Redirecionar para o frontend com o access token
+    const redirectUrl = `http://localhost:5173/auth/callback?token=${accessToken}`;
+    res.redirect(redirectUrl);
+  } catch (error) {
+    return res.redirect("http://localhost:5173/login?error=auth_failed");
+  }
+});
+
+// ==================== PROFILE ROUTES ====================
+
+// Rota para atualizar perfil do usuário
+server.put("/users/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, email, password, description, categories } = req.body;
+
+  try {
+    const bcrypt = require("bcryptjs");
+    const db = router.db;
+
+    // Buscar usuário atual
+    const user = db
+      .get("users")
+      .find({ id: parseInt(id, 10) })
+      .value();
+
+    if (!user) {
+      return res.status(404).json({ message: "Usuário não encontrado" });
+    }
+
+    // Validar email se foi alterado
+    if (email && email !== user.email) {
+      const existingUser = db.get("users").find({ email }).value();
+      if (existingUser) {
+        return res.status(400).json({ message: "Este email já está em uso" });
+      }
+    }
+
+    // Preparar dados de atualização
+    const updateData = {
+      ...user,
+    };
+
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (description !== undefined) updateData.description = description;
+    if (categories !== undefined) updateData.categories = categories;
+
+    // Atualizar senha se fornecida
+    if (password && password.trim() !== "") {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
+    // Atualizar no banco
+    db.get("users")
+      .find({ id: parseInt(id, 10) })
+      .assign(updateData)
+      .write();
+
+    // Buscar usuário atualizado
+    const updatedUser = db
+      .get("users")
+      .find({ id: parseInt(id, 10) })
+      .value();
+
+    // Retornar usuário atualizado (sem senha)
+    return res.json({
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        description: updatedUser.description || null,
+        categories: updatedUser.categories || [],
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Erro ao atualizar perfil" });
+  }
+});
+
 // Bind database to server
 server.db = router.db;
 
 // Usar apenas o router (sem json-server-auth que sobrescreve nossas rotas)
-// Nossas rotas customizadas de /login e /auth/refresh já foram definidas acima
+// As rotas customizadas de /login e /auth/refresh já foram definidas acima
 server.use(router);
 
 const PORT = process.env.PORT || 3001;
