@@ -3,7 +3,7 @@
 <img width="1896" height="907" alt="Image" src="https://github.com/user-attachments/assets/41046e43-372d-4b27-9b1e-1243e31d6b6a" />
 
 
-O projeto CodeConnect consistiu no desenvolvimento de uma plataforma web responsiva de networking para atender a necessidade dos desenvolvedores, combinando segurança avançada e recursos de conexão em um ambiente otimizado para desktop e dispositivos móveis. Em termos de segurança, o sistema conta com cadastro e login validados em tempo real, medidor de força de senha, autenticação social via Google OAuth, rotas protegidas e renovação automatizada de sessão via *Refresh Tokens* baseados em JWT. Para a interação dos usuários, a plataforma disponibiliza o gerenciamento de perfil com seleção de especialidades técnicas, um feed dinâmico com a listagem dos profissionais cadastrados e um canal integrado de envio de mensagens para contato direto entre os membros.
+O projeto CodeConnect (Versão Divulgação de Desenvolvedores) consistiu no desenvolvimento de uma plataforma web responsiva de networking para atender a necessidade dos desenvolvedores, combinando segurança avançada e recursos de conexão em um ambiente otimizado para desktop e dispositivos móveis. Em termos de segurança, o sistema conta com cadastro e login validados em tempo real, medidor de força de senha, autenticação social via Google OAuth, rotas protegidas e renovação automatizada de sessão via *Refresh Tokens* baseados em JWT. Para a interação dos usuários, a plataforma disponibiliza o gerenciamento de perfil com seleção de especialidades técnicas, um feed dinâmico com a listagem dos profissionais cadastrados e um canal integrado de envio de mensagens para contato direto entre os membros.
 
 ## Funcionalidades Principais
 
